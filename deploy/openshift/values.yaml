@@ -1,0 +1,20 @@
+# Instancia única
+replicaCount: 1
+
+# Inyectar todo el Secret creado manualmente desde el .env
+envFrom:
+  - secretRef:
+      name: tiktok-monitor-env
+
+# Permisos de configuración para el usuario inicial
+env:
+  N8N_HOST: "localhost"
+  N8N_PROTOCOL: "http"
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+  N8N_INSTANCE_OWNER_MANAGED_BY_ENV: "true"
+  N8N_INSTANCE_OWNER_FIRST_NAME: "Admin"
+  N8N_INSTANCE_OWNER_LAST_NAME: "User"
+
+# Compatibilidad con las políticas de seguridad (SCC) de OpenShift
+podSecurityContext: {}
+containerSecurityContext: {}
