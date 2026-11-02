@@ -1,0 +1,364 @@
+{
+  "name": "TikTok Marketing Outreach Pipeline (Con Sticky Note)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "### 📢 Panel de Outreach de TikTok (Con Audio Real)\n\n1. Revisa los influencers en el nodo **1. Configuración Inicial**.\n2. Pulsa **Execute Workflow** abajo a la izquierda.\n3. El sub-flujo extraerá el archivo multimedia de TikTok y lo transcribirá con Gemini antes de generar el mensaje final.\n4. Al terminar, abre el nodo **`8. Formatear Mensajes`**.",
+        "height": 260,
+        "width": 360,
+        "color": 6
+      },
+      "id": "sticky-note-instructions",
+      "name": "Instrucciones de Uso",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### 🎙️ SUB-MÓDULO: Transcripción de Audio",
+        "height": 200,
+        "width": 820,
+        "color": 7
+      },
+      "id": "sticky-note-subworkflow-bg",
+      "name": "Fondo Sub-Flujo Audio",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        980,
+        420
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Execute Workflow",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "influencer_list",
+              "value": "@diegodoal, @ibaillanos",
+              "fieldLabel": "1. Lista de Influencers (separados por comas)"
+            },
+            {
+              "name": "modelo_gemini",
+              "value": "gemini-3.5-flash-lite",
+              "fieldLabel": "2. Modelo de Gemini (gemini-3.5-flash-lite o gemini-3.8-flash)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "input-form",
+      "name": "1. Configuración Inicial",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawInput = $input.item.json.influencer_list || '@diegodoal, @ibaillanos';\nconst selectedModel = $input.item.json.modelo_gemini || 'gemini-3.5-flash-lite';\n\nconst profiles = rawInput\n  .split(/[,\\n\\s]+/)\n  .map(handle => handle.replace('@', '').trim().toLowerCase())\n  .filter(handle => handle.length > 0);\n\nreturn profiles.map(profile => ({\n  json: { profile, selectedModel }\n}));"
+      },
+      "id": "split-influencer-list",
+      "name": "2. Separar Lista",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/clockworks~free-tiktok-scraper/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $env.APIFY_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"profiles\": [\"{{ $json.profile }}\"],\n  \"resultsPerPage\": 3,\n  \"shouldDownloadVideos\": false,\n  \"shouldDownloadCovers\": false\n}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "apify-scraper",
+      "name": "3. Obtener Vídeos de TikTok",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const initialProfiles = $('2. Separar Lista').all();\nconst allVideos = $input.all().map(i => i.json);\n\nconst output = [];\n\nfor (let i = 0; i < initialProfiles.length; i++) {\n  const config = initialProfiles[i].json;\n  const targetProfile = config.profile;\n  \n  const targetVideos = allVideos.filter(v => {\n    const author = (v.authorMeta?.name || v.author || '').toLowerCase();\n    return author.includes(targetProfile) || targetProfile.includes(author);\n  });\n  \n  const pool = targetVideos.length > 0 ? targetVideos : allVideos;\n  \n  // FILTRO ANTI-PUBLI\n  const nonSponsored = pool.filter(item => {\n    if (item.isSponsored === true) return false;\n    const text = (item.text || item.caption || item.desc || '').toLowerCase();\n    const adKeywords = ['#publi', '#ad', '#advertisement', 'patrocinado', 'colaboracion', 'colaboración', '#sponsor', '#sponsored'];\n    return !adKeywords.some(kw => text.includes(kw));\n  });\n  \n  const validItems = nonSponsored.length > 0 ? nonSponsored : pool;\n  const selected = validItems.length > 0 ? validItems[Math.floor(Math.random() * validItems.length)] : {};\n  \n  const author = selected.authorMeta?.name || selected.author || targetProfile;\n  const fullCaption = selected.text || selected.caption || selected.desc || 'Sin descripción';\n  const videoUrl = selected.webVideoUrl || (selected.id ? `https://www.tiktok.com/@${author}/video/${selected.id}` : `https://www.tiktok.com/@${author}`);\n  const audioUrl = selected.musicMeta?.playUrl || null;\n  \n  output.push({\n    json: {\n      author: author,\n      caption: fullCaption.substring(0, 400),\n      videoUrl: videoUrl,\n      audioUrl: audioUrl,\n      selectedModel: config.selectedModel || 'gemini-3.5-flash-lite'\n    }\n  });\n}\n\nreturn output;"
+      },
+      "id": "prepare-audio-download",
+      "name": "Sub-Flujo: 1. Extraer URL Audio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1010,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.audioUrl }}",
+        "responseFormat": "file",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Referer",
+              "value": "https://www.tiktok.com/"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "download-mp3",
+      "name": "Sub-Flujo: 2. Descargar Fichero",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1210,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const metaItems = $('Sub-Flujo: 1. Extraer URL Audio').all();\nconst results = [];\n\nfor (let i = 0; i < $input.all().length; i++) {\n  const item = $input.all()[i];\n  const metaData = metaItems[i]?.json || {};\n  \n  let base64Str = '';\n  let mimeType = 'video/mp4';\n  \n  if (item.binary && item.binary.data) {\n    mimeType = item.binary.data.mimeType || 'video/mp4';\n    // Usar el helper nativo de n8n para obtener el buffer aunque esté en filesystem-v2\n    const buffer = await this.helpers.getBinaryDataBuffer(i, 'data');\n    base64Str = buffer.toString('base64');\n  }\n  \n  results.push({\n    json: {\n      author: metaData.author,\n      caption: metaData.caption,\n      videoUrl: metaData.videoUrl,\n      selectedModel: metaData.selectedModel,\n      base64Data: base64Str,\n      mimeType: mimeType\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "encode-binary-base64",
+      "name": "Sub-Flujo: 3. Preparar Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1410,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $json.selectedModel || 'gemini-3.5-flash-lite' }}:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"inlineData\": {\n            \"mimeType\": \"{{ $json.mimeType }}\",\n            \"data\": \"{{ $json.base64Data }}\"\n          }\n        },\n        {\n          \"text\": \"Transcribe fielmente el contenido hablado de este archivo multimedia de TikTok a texto en español. Omite ruidos o música de fondo y responde UNICAMENTE con la transcripción literal del mensaje hablado en una o dos frases cortas.\"\n        }\n      ]\n    }\n  ]\n}"
+      },
+      "id": "transcribe-audio-gemini",
+      "name": "Sub-Flujo: 4. Transcribir Audio (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1610,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const geminiItems = $input.all();\nconst prepItems = $('Sub-Flujo: 3. Preparar Base64').all();\nconst output = [];\n\nfor (let i = 0; i < geminiItems.length; i++) {\n  const transcriptionResp = geminiItems[i].json;\n  const metaData = prepItems[i]?.json || {};\n  \n  let audioTranscription = '';\n  const rawText = transcriptionResp.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (rawText) {\n    audioTranscription = rawText.trim();\n  }\n  \n  const prompt = [\n    'Analiza la información de este contenido de TikTok para redactar un mensaje de outreach.',\n    `Transcripción literal del audio del vídeo: \"${audioTranscription || 'Sin transcripción disponible'}\"`,\n    `Texto de la descripción: \"${metaData.caption}\"`,\n    'Extrae una frase hiper-natural, desenfadada y corta (máximo 8 palabras) sobre la idea central o el chascarrillo hablado del vídeo. Debe sonar espontánea para encajar tras: \"estaba viendo tu vídeo sobre [resumen]\".',\n    'Responde UNICAMENTE un JSON válido: {\"video_topic_phrase\": \"frase resumiendo el tema o chascarrillo\"}'\n  ].join('\\n');\n  \n  output.push({\n    json: {\n      author: metaData.author,\n      videoUrl: metaData.videoUrl,\n      transcription: audioTranscription,\n      selectedModel: metaData.selectedModel,\n      geminiPayload: {\n        contents: [{ parts: [{ text: prompt }] }],\n        generationConfig: {\n          responseMimeType: 'application/json',\n          maxOutputTokens: 200\n        }\n      }\n    }\n  });\n}\n\nreturn output;"
+      },
+      "id": "clean-data-and-prep-prompt",
+      "name": "6. Preparar Prompt Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $json.selectedModel || 'gemini-3.5-flash-lite' }}:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiPayload) }}"
+      },
+      "id": "gemini-summarizer",
+      "name": "7. Generar Propuesta (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2100,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const geminiItems = $input.all();\nconst prepPromptItems = $('6. Preparar Prompt Final').all();\nconst results = [];\n\nfor (let i = 0; i < geminiItems.length; i++) {\n  const geminiResp = geminiItems[i].json;\n  const prepData = prepPromptItems[i]?.json || {};\n  \n  let topicPhrase = 'tu último vídeo';\n  const rawText = geminiResp.candidates?.[0]?.content?.parts?.[0]?.text;\n  \n  if (rawText) {\n    try {\n      const parsed = JSON.parse(rawText);\n      if (parsed.video_topic_phrase) {\n        topicPhrase = parsed.video_topic_phrase;\n      }\n    } catch (e) {\n      topicPhrase = rawText.trim();\n    }\n  }\n  \n  const msg = `Buenas! Te escribo desde una firma líder de servicios financieros. Llevamos tiempo siguiendo tu contenido y justo estaba viendo tu vídeo sobre ${topicPhrase}, ¡muy top! Nos gustaría proponerte una colaboración estratégica para algunas acciones que estamos preparando. ¿Tendrías un hueco esta semana y te cuento más detalles?`;\n  \n  results.push({\n    influencer: `@${prepData.author || 'creador'}`,\n    mensaje_personalizado: msg,\n    link_video: prepData.videoUrl || '',\n    transcripcion_audio: prepData.transcription || 'N/A'\n  });\n}\n\nreturn results.map(item => ({ json: item }));"
+      },
+      "id": "format-final-output",
+      "name": "8. Formatear Mensajes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow": {
+      "main": [
+        [
+          {
+            "node": "1. Configuración Inicial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Configuración Inicial": {
+      "main": [
+        [
+          {
+            "node": "2. Separar Lista",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Separar Lista": {
+      "main": [
+        [
+          {
+            "node": "3. Obtener Vídeos de TikTok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Obtener Vídeos de TikTok": {
+      "main": [
+        [
+          {
+            "node": "Sub-Flujo: 1. Extraer URL Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sub-Flujo: 1. Extraer URL Audio": {
+      "main": [
+        [
+          {
+            "node": "Sub-Flujo: 2. Descargar Fichero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sub-Flujo: 2. Descargar Fichero": {
+      "main": [
+        [
+          {
+            "node": "Sub-Flujo: 3. Preparar Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sub-Flujo: 3. Preparar Base64": {
+      "main": [
+        [
+          {
+            "node": "Sub-Flujo: 4. Transcribir Audio (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sub-Flujo: 4. Transcribir Audio (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "6. Preparar Prompt Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Preparar Prompt Final": {
+      "main": [
+        [
+          {
+            "node": "7. Generar Propuesta (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Generar Propuesta (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "8. Formatear Mensajes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
