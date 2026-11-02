@@ -1,0 +1,274 @@
+{
+  "name": "TikTok Multi-Creator Monitor (Apify + Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule (Daily)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Test now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/clockworks~free-tiktok-scraper/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $env.APIFY_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"profiles\": [\"diegodoal\"],\n  \"resultsPerPage\": 3,\n  \"shouldDownloadVideos\": false,\n  \"shouldDownloadCovers\": false\n}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "apify-scraper",
+      "name": "Apify - Scrape TikTok",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenVideoIds = staticData.seenVideoIds || [];\n\nconst items = $input.all().map(i => i.json);\nif (!items.length) {\n  return [];\n}\n\nconst targetProfiles = [\"diegodoal\"];\n\nfunction parseTime(item) {\n  if (item.createTimeISO) {\n    const t = Date.parse(item.createTimeISO);\n    if (!Number.isNaN(t)) return t;\n  }\n  const raw = Number(item.createTime);\n  if (!Number.isFinite(raw) || raw === 0) return 0;\n  return raw < 1e12 ? raw * 1000 : raw;\n}\n\nconst byAuthor = {};\nfor (const item of items) {\n  const author = (\n    item.authorMeta?.name ||\n    item.authorMeta?.nickName ||\n    item.author ||\n    \"\"\n  ).replace('@', '').toLowerCase();\n\n  const matched = targetProfiles.find(t => t.toLowerCase() === author) || author || \"unknown\";\n  const createTime = parseTime(item);\n\n  if (!byAuthor[matched] || createTime > byAuthor[matched].timestamp) {\n    byAuthor[matched] = {\n      id: String(item.id || item.videoMeta?.id || \"\"),\n      author: matched,\n      authorDisplay: item.authorMeta?.name || matched,\n      text: item.text || item.caption || item.desc || \"No caption\",\n      webVideoUrl: item.webVideoUrl || `https://www.tiktok.com/@${matched}/video/${item.id}`,\n      timestamp: createTime\n    };\n  }\n}\n\nconst newVideos = [];\nfor (const author of Object.keys(byAuthor)) {\n  const video = byAuthor[author];\n  if (video.id && !staticData.seenVideoIds.includes(video.id)) {\n    newVideos.push({ json: video });\n  }\n}\nreturn newVideos;\n"
+      },
+      "id": "filter-deduplicate",
+      "name": "Filter Newest & Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nconst caption = String(item.text || 'No caption');\nconst author = String(item.authorDisplay || item.author || 'unknown');\nconst prompt = [\n  'You are an executive content analyst.',\n  `Caption and information from a TikTok video by @${author}:`,\n  '',\n  `Caption: ${caption}`,\n  '',\n  'Return ONLY JSON with these keys:',\n  '- takeaway: one punchy English sentence with the core message',\n  '- topic: 2-4 words',\n  '- context: 1-2 sentences of background'\n].join('\\n');\n\nreturn [{\n  json: {\n    id: item.id,\n    author: item.author,\n    authorDisplay: item.authorDisplay,\n    text: item.text,\n    webVideoUrl: item.webVideoUrl,\n    timestamp: item.timestamp,\n    geminiPayload: {\n      contents: [{ parts: [{ text: prompt }] }],\n      generationConfig: { responseMimeType: 'application/json' }\n    }\n  }\n}];\n"
+      },
+      "id": "prepare-gemini",
+      "name": "Prepare Gemini Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiPayload) }}"
+      },
+      "id": "gemini-summarizer",
+      "name": "Gemini 2.5 Flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenVideoIds = staticData.seenVideoIds || [];\nstaticData.feed = staticData.feed || [];\n\nconst video = $('Prepare Gemini Request').item.json;\nconst gemini = $input.item.json;\n\nlet summary = { takeaway: 'No summary', topic: '', context: '' };\nconst raw = gemini.candidates?.[0]?.content?.parts?.[0]?.text;\nif (raw) {\n  try {\n    const parsed = JSON.parse(raw);\n    summary = {\n      takeaway: parsed.takeaway || summary.takeaway,\n      topic: parsed.topic || '',\n      context: parsed.context || ''\n    };\n  } catch (error) {\n    summary.takeaway = String(raw);\n  }\n}\n\nif (video.id && !staticData.seenVideoIds.includes(video.id)) {\n  staticData.seenVideoIds.push(video.id);\n}\nif (staticData.seenVideoIds.length > 200) {\n  staticData.seenVideoIds = staticData.seenVideoIds.slice(-200);\n}\n\nconst entry = {\n  id: video.id,\n  author: video.authorDisplay,\n  url: video.webVideoUrl,\n  caption: video.text,\n  takeaway: summary.takeaway,\n  topic: summary.topic,\n  context: summary.context,\n  at: new Date().toISOString()\n};\n\nstaticData.feed.unshift(entry);\nstaticData.feed = staticData.feed.slice(0, 50);\nreturn [{ json: entry }];\n"
+      },
+      "id": "store-feed",
+      "name": "Save to Dashboard Feed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "tiktok-feed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "dashboard-webhook",
+      "name": "Dashboard Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        700
+      ],
+      "webhookId": "tiktok-feed"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst feed = staticData.feed || [];\n\nfunction esc(value) {\n  return String(value ?? '')\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n}\n\nfunction when(iso) {\n  try {\n    return new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/Madrid' });\n  } catch (error) {\n    return iso || '';\n  }\n}\n\nconst cards = feed.length\n  ? feed.map((item) => `\n      <article class=\"card\">\n        <div class=\"meta\">\n          <span class=\"author\">@${esc(item.author)}</span>\n          ${item.topic ? `<span class=\"topic\">${esc(item.topic)}</span>` : ''}\n        </div>\n        <h2>${esc(item.takeaway)}</h2>\n        ${item.context ? `<p>${esc(item.context)}</p>` : ''}\n        <p class=\"caption\">${esc(item.caption)}</p>\n        <div class=\"footer\">\n          <a href=\"${esc(item.url)}\" target=\"_blank\" rel=\"noopener\">Watch on TikTok</a>\n          <time>${esc(when(item.at))}</time>\n        </div>\n      </article>`).join('')\n  : '<p class=\"empty\">No videos analyzed yet. Activate this workflow in n8n, click <b>Test now</b>, then refresh this page.</p>';\n\nconst html = `<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\"/>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>\n  <title>TikTok Monitor</title>\n  <style>\n    :root { color-scheme: dark; }\n    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #111; color: #eee; }\n    main { max-width: 720px; margin: 0 auto; padding: 32px 20px 64px; }\n    h1 { font-size: 1.4rem; font-weight: 650; margin: 0 0 8px; }\n    .sub { color: #aaa; margin: 0 0 28px; }\n    .card { border: 1px solid #333; border-radius: 12px; padding: 18px 18px 14px; margin-bottom: 14px; background: #1a1a1a; }\n    .meta { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }\n    .author { font-weight: 600; }\n    .topic { font-size: 0.8rem; color: #111; background: #d6e4ff; padding: 2px 8px; border-radius: 999px; }\n    h2 { font-size: 1.05rem; line-height: 1.4; margin: 0 0 8px; font-weight: 600; }\n    p { margin: 0 0 8px; color: #ccc; line-height: 1.45; }\n    .caption { color: #888; font-size: 0.9rem; }\n    .footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 0.85rem; }\n    a { color: #9cbcff; }\n    .empty { color: #aaa; }\n  </style>\n</head>\n<body>\n  <main>\n    <h1>TikTok Monitor</h1>\n    <p class=\"sub\">Latest AI takeaways from tracked creators</p>\n    ${cards}\n  </main>\n</body>\n</html>`;\n\nreturn [{ json: { html } }];\n"
+      },
+      "id": "render-dashboard",
+      "name": "Render Dashboard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-dashboard",
+      "name": "Respond with HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        700
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule (Daily)": {
+      "main": [
+        [
+          {
+            "node": "Apify - Scrape TikTok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test now": {
+      "main": [
+        [
+          {
+            "node": "Apify - Scrape TikTok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify - Scrape TikTok": {
+      "main": [
+        [
+          {
+            "node": "Filter Newest & Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Newest & Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Prepare Gemini Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Gemini Request": {
+      "main": [
+        [
+          {
+            "node": "Gemini 2.5 Flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini 2.5 Flash": {
+      "main": [
+        [
+          {
+            "node": "Save to Dashboard Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard Webhook": {
+      "main": [
+        [
+          {
+            "node": "Render Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Respond with HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
