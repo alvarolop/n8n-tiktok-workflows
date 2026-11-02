@@ -1,6 +1,6 @@
-# TikTok AI Monitor
+# TikTok AI Outreach & Content Monitor
 
-Automated content monitoring pipeline built on **n8n**, **Apify**, and **Google Gemini AI**. It tracks public TikTok creators, captures their latest videos, synthesizes a short key takeaway with Gemini 2.5 Flash, and shows the results on a simple page inside n8n.
+Automated commercial outreach and content analysis pipeline built on **n8n**, **Apify**, and **Google Gemini AI**. It tracks public TikTok creators, captures their latest video audio, transcribes the speech multimodal-first using Google Gemini, applies anti-sponsorship filtering, and generates personalized commercial outreach messages displayed directly in n8n's visual output.
 
 Operates on free tiers with **no TikTok credentials or business API required**. Cross-platform and containerized for **Windows** and **Linux Fedora**.
 
@@ -8,14 +8,13 @@ Operates on free tiers with **no TikTok credentials or business API required**. 
 
 ## What We Want to Achieve
 
-* **Automated Creator Monitoring:** Check public TikTok creators (e.g. `@diegodoal`) on a daily schedule.
-* **Single-Batch Scraping:** Query all creators in one Apify call to conserve monthly free quota.
-* **Smart Deduplication:** Skip videos already processed using n8n workflow memory.
-* **AI Key Takeaway Extraction:** Use Gemini 2.5 Flash to produce:
-  * **Key Takeaway:** 1 punchy sentence summarizing the core message.
-  * **Topic:** 2–4 words defining the theme.
-  * **Context:** 1–2 sentences of background.
-* **Simple dashboard:** Open a local HTML page served by n8n to read the latest analyses.
+- **Commercial Outreach Pipeline:** Targeted prospecting workflow designed for non-technical marketing teams to connect with financial services creators.
+- **Sequential Per-Profile Processing:** Iterate profile-by-profile to handle influencer lists safely, applying automatic retries (mitigating 503 errors).
+- **Anti-Sponsorship Filtering:** Exclude sponsored videos (`#publi`, `#ad`, `#sponsor`, etc.) to focus exclusively on organic content.
+- **Native Audio Extraction & Transcription:** Retrieve direct audio streams (`musicMeta.playUrl`) with zero extra Apify credit consumption, convert to Base64, and transcribe spoken content via Gemini.
+- **Hyper-Personalized Outreach Copywriting:** Synthesize natural sales hooks from real video speech combined with captions, outputs directly into a clean tabular layout inside n8n.
+
+![Flujo Completo de Outreach de TikTok en n8n](docs/images/full-workflow.png)
 
 ---
 
@@ -23,11 +22,12 @@ Operates on free tiers with **no TikTok credentials or business API required**. 
 
 ```mermaid
 flowchart LR
-    A["Schedule / Manual"] --> B["Apify TikTok Scraper"]
-    B --> C["Deduplicate"]
-    C --> D["Gemini 2.5 Flash"]
-    D --> E["Store in n8n memory"]
-    F["Dashboard webhook"] --> G["HTML feed in n8n"]
+    A["Execute Workflow / Input Form"] --> B["Split Profile List"]
+    B --> C["Apify TikTok Scraper"]
+    C --> D["Sub-Workflow: Extract & Transcribe Audio"]
+    D --> E["Prepare Gemini Prompt"]
+    E --> F["Gemini AI (Outreach Copywriting)"]
+    F --> G["Formatted Output Table (n8n UI)"]
 ```
 
 1. **Automation Engine:** **n8n** (Community Edition) via Podman / Docker Compose.
