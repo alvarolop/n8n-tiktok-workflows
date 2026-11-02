@@ -1,0 +1,44 @@
+# ==============================================================================
+# n8n Local Setup with Podman Compose
+#
+# Secrets live in .env only. Start with:
+#   podman compose --env-file .env up -d
+# ==============================================================================
+
+services:
+  n8n:
+    image: docker.io/n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Europe/Madrid
+
+      # Allow workflow nodes to read APIFY_API_TOKEN / GEMINI_API_KEY
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+
+      # Community Edition Activation Key (from .env)
+      - N8N_LICENSE_ACTIVATION_KEY=${N8N_LICENSE_ACTIVATION_KEY}
+
+      # Auto-provision instance owner on startup (from .env)
+      - N8N_INSTANCE_OWNER_MANAGED_BY_ENV=true
+      - N8N_INSTANCE_OWNER_EMAIL=${N8N_OWNER_EMAIL:-admin@example.org}
+      - N8N_INSTANCE_OWNER_PASSWORD_HASH=${N8N_OWNER_PASSWORD_HASH}
+      - N8N_INSTANCE_OWNER_FIRST_NAME=Admin
+      - N8N_INSTANCE_OWNER_LAST_NAME=User
+
+      # Passed through from .env into the n8n container
+      - APIFY_API_TOKEN=${APIFY_API_TOKEN}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:
+    name: n8n_data
